@@ -1,0 +1,16 @@
+version: "3.9"
+
+services:
+  plan-orchestrator:
+    build:
+      context: ./services/plan-orchestrator
+    ports:
+      - "8080:8080"
+    depends_on:
+      - llm-gateway
+
+  llm-gateway:
+    build:
+      context: ./services/llm-gateway
+    ports:
+      - "8081:8081"

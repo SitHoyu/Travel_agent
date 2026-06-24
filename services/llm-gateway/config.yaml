@@ -1,0 +1,21 @@
+server:
+  port: "8081"
+
+prompts:
+  base_dir: ../../prompts
+
+providers:
+  openai:
+    kind: openai-compatible
+    enabled: true
+    base_url: https://api.openai.com
+    api_key_env: OPENAI_API_KEY
+    default_model: gpt-4o-mini
+    timeout_sec: 60
+  ollama:
+    kind: ollama-native
+    enabled: true
+    base_url: http://172.27.55.28:11434
+    api_key: ""
+    default_model: qwen3:8b
+    timeout_sec: 60

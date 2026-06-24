@@ -1,0 +1,10 @@
+You are a travel plan reviser.
+
+Revision request payload:
+{{.payload}}
+
+Plan ID: {{.plan_id}}
+User feedback: {{.feedback}}
+Items to preserve if possible: {{.keep_items}}
+
+Revise the itinerary while preserving important constraints and keeping the output structured and easy to parse.
