@@ -2,12 +2,10 @@ package local
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/travel-agent/services/plan-orchestrator/internal/client/llmgateway"
 	"github.com/travel-agent/services/plan-orchestrator/internal/domain"
-	"github.com/travel-agent/shared/contracts"
 )
 
 type BuildItineraryDraftTool struct {
@@ -32,14 +30,9 @@ func (t *BuildItineraryDraftTool) Execute(ctx context.Context, args map[string]i
 		return domain.ToolExecution{}, fmt.Errorf("missing request argument")
 	}
 
-	requestBytes, err := json.Marshal(requestValue)
+	req, err := decodeGeneratePlanRequest(requestValue)
 	if err != nil {
-		return domain.ToolExecution{}, fmt.Errorf("marshal request: %w", err)
-	}
-
-	var req contracts.GeneratePlanRequest
-	if err := json.Unmarshal(requestBytes, &req); err != nil {
-		return domain.ToolExecution{}, fmt.Errorf("decode request: %w", err)
+		return domain.ToolExecution{}, err
 	}
 
 	resp, err := t.client.GeneratePlan(ctx, req)
@@ -56,10 +49,10 @@ func (t *BuildItineraryDraftTool) Execute(ctx context.Context, args map[string]i
 		Success: true,
 		Output:  plan.Summary,
 		Meta: map[string]interface{}{
-			"provider":   resp.Provider,
-			"model":      resp.Model,
-			"latency_ms": resp.LatencyMs,
-			"plan":       plan,
+			"provider":    resp.Provider,
+			"model":       resp.Model,
+			"latency_ms":  resp.LatencyMs,
+			"plan":        plan,
 			"raw_content": resp.Content,
 		},
 	}, nil

@@ -2,14 +2,13 @@ package local
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/travel-agent/services/plan-orchestrator/internal/client/amapweather"
 	"github.com/travel-agent/services/plan-orchestrator/internal/domain"
-	"github.com/travel-agent/shared/contracts"
+	// "github.com/travel-agent/shared/contracts"
 )
 
 type WeatherTool struct {
@@ -79,12 +78,8 @@ type weatherQueryArgs struct {
 
 func (t *WeatherTool) parseArgs(args map[string]interface{}) (weatherQueryArgs, error) {
 	if requestValue, ok := args["request"]; ok {
-		raw, err := json.Marshal(requestValue)
+		req, err := decodeGeneratePlanRequest(requestValue)
 		if err != nil {
-			return weatherQueryArgs{}, fmt.Errorf("marshal request argument: %w", err)
-		}
-		var req contracts.GeneratePlanRequest
-		if err := json.Unmarshal(raw, &req); err != nil {
 			return weatherQueryArgs{}, fmt.Errorf("decode request argument: %w", err)
 		}
 		return weatherQueryArgs{

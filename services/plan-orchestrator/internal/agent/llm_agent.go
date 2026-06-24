@@ -51,6 +51,7 @@ func (a *LLMAgent) Think(ctx context.Context, session *domain.Session) (domain.T
 
 	enrichDraftToolCalls(session, &decision)
 	enrichValidationToolCalls(session, &decision)
+	enforceStageGuards(session, &decision)
 	return toThought(decision), nil
 }
 
@@ -159,6 +160,10 @@ func latestSuccessfulToolOutput(session *domain.Session, toolName string) string
 	return ""
 }
 
+func hasSuccessfulToolExecution(session *domain.Session, toolName string) bool {
+	return strings.TrimSpace(latestSuccessfulToolOutput(session, toolName)) != ""
+}
+
 func enrichValidationToolCalls(session *domain.Session, decision *domain.AgentDecision) {
 	draft := latestSuccessfulToolOutput(session, "build_itinerary_draft")
 	if strings.TrimSpace(draft) == "" {
@@ -193,6 +198,76 @@ func enrichValidationToolCalls(session *domain.Session, decision *domain.AgentDe
 			decision.ToolCalls[i].Arguments["weather_summary"] = weatherSummary
 		}
 	}
+}
+
+func enforceStageGuards(session *domain.Session, decision *domain.AgentDecision) {
+	hasDraft := hasSuccessfulToolExecution(session, "build_itinerary_draft")
+	hasValidation := hasSuccessfulToolExecution(session, "validate_constraints")
+
+	if !hasDraft {
+		return
+	}
+
+	// Once a draft exists, never allow another draft call in later turns.
+	filtered := make([]domain.ToolCallDecision, 0, len(decision.ToolCalls))
+	removedDraftCall := false
+	for _, call := range decision.ToolCalls {
+		if call.Name == "build_itinerary_draft" {
+			removedDraftCall = true
+			continue
+		}
+		filtered = append(filtered, call)
+	}
+	decision.ToolCalls = filtered
+
+	// After a draft exists, validation must happen before final completion.
+	if !hasValidation {
+		if !containsTool(decision.ToolCalls, "validate_constraints") {
+			req, err := requestFromSession(session)
+			if err == nil {
+				callArgs := map[string]interface{}{
+					"request": req,
+				}
+				if weatherSummary := latestSuccessfulToolOutput(session, "query_weather"); strings.TrimSpace(weatherSummary) != "" {
+					callArgs["weather_summary"] = weatherSummary
+				}
+
+				decision.ToolCalls = append([]domain.ToolCallDecision{
+					{
+						Name:      "validate_constraints",
+						Arguments: callArgs,
+					},
+				}, decision.ToolCalls...)
+			}
+		}
+
+		decision.Done = false
+		decision.FinalAnswer = ""
+		if removedDraftCall && strings.TrimSpace(decision.Thought) == "" {
+			decision.Thought = "已生成草案，下一步进行约束校验。"
+		}
+		return
+	}
+
+	// If validation already exists, do not allow more tool calls in later turns.
+	decision.ToolCalls = nil
+}
+
+func containsTool(calls []domain.ToolCallDecision, name string) bool {
+	for _, call := range calls {
+		if call.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func requestFromSession(session *domain.Session) (contracts.GeneratePlanRequest, error) {
+	var req contracts.GeneratePlanRequest
+	if err := json.Unmarshal([]byte(session.RequestText), &req); err != nil {
+		return contracts.GeneratePlanRequest{}, err
+	}
+	return req, nil
 }
 
 func extractJSON(raw string) string {

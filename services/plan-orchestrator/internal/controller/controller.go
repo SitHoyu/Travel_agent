@@ -94,6 +94,7 @@ func (c *Controller) Run(ctx context.Context, req contracts.GeneratePlanRequest)
 				MessageCount:      len(session.Messages),
 				ExecutedTools:     executedToolNames(session),
 				ValidationSummary: latestToolOutputByName(session, "validate_constraints"),
+				ToolExecutions:    toolExecutionTraces(session),
 			}, nil
 		}
 
@@ -145,6 +146,29 @@ func executedToolNames(session *domain.Session) []string {
 		names = append(names, execution.Name)
 	}
 	return names
+}
+
+func toolExecutionTraces(session *domain.Session) []domain.ToolTrace {
+	if len(session.Executions) == 0 {
+		return nil
+	}
+
+	traces := make([]domain.ToolTrace, 0, len(session.Executions))
+	for _, execution := range session.Executions {
+		traces = append(traces, domain.ToolTrace{
+			Name:    execution.Name,
+			Success: execution.Success,
+			Output:  truncateForResponse(execution.Output, 240),
+		})
+	}
+	return traces
+}
+
+func truncateForResponse(text string, maxLen int) string {
+	if len(text) <= maxLen {
+		return text
+	}
+	return text[:maxLen] + "..."
 }
 
 func buildPlanDraft(session *domain.Session, req contracts.GeneratePlanRequest, content string) contracts.Plan {

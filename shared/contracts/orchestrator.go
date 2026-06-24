@@ -10,4 +10,11 @@ type AgentPlanResponse struct {
 	MessageCount      int      `json:"message_count"`
 	ExecutedTools     []string `json:"executed_tools,omitempty"`
 	ValidationSummary string   `json:"validation_summary,omitempty"`
+	ToolExecutions    []ToolTrace `json:"tool_executions,omitempty"`
+}
+
+type ToolTrace struct {
+	Name    string `json:"name"`
+	Success bool   `json:"success"`
+	Output  string `json:"output"`
 }
