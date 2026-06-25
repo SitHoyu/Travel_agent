@@ -23,7 +23,7 @@ func (t *ValidateConstraintsTool) Name() string {
 }
 
 func (t *ValidateConstraintsTool) Description() string {
-	return "Validate the generated itinerary against key constraints such as budget limit, destination consistency, and weather adaptation. Args: request, draft, optional weather_summary."
+	return "Validate the generated itinerary against key constraints such as destination consistency, daily activity count, budget limit, and weather adaptation. Args: request, plan, draft, optional weather_summary."
 }
 
 func (t *ValidateConstraintsTool) Execute(_ context.Context, args map[string]interface{}) (domain.ToolExecution, error) {
@@ -32,25 +32,31 @@ func (t *ValidateConstraintsTool) Execute(_ context.Context, args map[string]int
 		return domain.ToolExecution{}, err
 	}
 
-	issues := make([]string, 0, 3)
-	checks := make([]string, 0, 3)
+	issues := make([]string, 0, 4)
+	checks := make([]string, 0, 4)
 
-	if issue := validateDestinationConsistency(input.Request, input.Draft); issue != "" {
+	if issue := validateDestinationConsistency(input.Request, input.Plan, input.Draft); issue != "" {
 		issues = append(issues, issue)
 	} else {
-		checks = append(checks, "目的地一致性通过")
+		checks = append(checks, "destination consistency passed")
 	}
 
-	if issue := validateBudget(input.Request, input.Draft); issue != "" {
+	if issue := validateDailyActivityCount(input.Request, input.Plan); issue != "" {
+		issues = append(issues, issue)
+	} else if len(input.Plan.Days) > 0 {
+		checks = append(checks, "daily activity count passed")
+	}
+
+	if issue := validateBudget(input.Request, input.Plan, input.Draft); issue != "" {
 		issues = append(issues, issue)
 	} else {
-		checks = append(checks, "预算约束通过")
+		checks = append(checks, "budget constraint passed")
 	}
 
-	if issue := validateWeatherAdaptation(input.WeatherSummary, input.Draft); issue != "" {
+	if issue := validateWeatherAdaptation(input.WeatherSummary, input.Plan, input.Draft); issue != "" {
 		issues = append(issues, issue)
 	} else if strings.TrimSpace(input.WeatherSummary) != "" {
-		checks = append(checks, "天气适配检查通过")
+		checks = append(checks, "weather adaptation passed")
 	}
 
 	passed := len(issues) == 0
@@ -69,6 +75,7 @@ func (t *ValidateConstraintsTool) Execute(_ context.Context, args map[string]int
 
 type validationInput struct {
 	Request        contracts.GeneratePlanRequest
+	Plan           contracts.Plan
 	Draft          string
 	WeatherSummary string
 }
@@ -79,93 +86,157 @@ func parseValidationInput(args map[string]interface{}) (validationInput, error) 
 		return validationInput{}, fmt.Errorf("missing request argument")
 	}
 
-	requestBytes, err := json.Marshal(requestValue)
+	req, err := decodeGeneratePlanRequest(requestValue)
 	if err != nil {
-		return validationInput{}, fmt.Errorf("marshal request: %w", err)
+		return validationInput{}, err
 	}
 
-	var req contracts.GeneratePlanRequest
-	if err := json.Unmarshal(requestBytes, &req); err != nil {
-		return validationInput{}, fmt.Errorf("decode request: %w", err)
+	plan, err := decodePlanArg(args["plan"])
+	if err != nil {
+		return validationInput{}, err
 	}
 
 	draft, _ := args["draft"].(string)
 	weatherSummary, _ := args["weather_summary"].(string)
-	if strings.TrimSpace(draft) == "" {
-		return validationInput{}, fmt.Errorf("draft is required")
+
+	if strings.TrimSpace(draft) == "" && strings.TrimSpace(plan.Summary) == "" {
+		return validationInput{}, fmt.Errorf("draft or plan summary is required")
 	}
 
 	return validationInput{
 		Request:        req,
+		Plan:           plan,
 		Draft:          draft,
 		WeatherSummary: weatherSummary,
 	}, nil
 }
 
-func validateDestinationConsistency(req contracts.GeneratePlanRequest, draft string) string {
+func decodePlanArg(value interface{}) (contracts.Plan, error) {
+	if value == nil {
+		return contracts.Plan{}, fmt.Errorf("missing plan argument")
+	}
+
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return contracts.Plan{}, fmt.Errorf("marshal plan: %w", err)
+	}
+
+	var plan contracts.Plan
+	if err := json.Unmarshal(raw, &plan); err != nil {
+		return contracts.Plan{}, fmt.Errorf("decode plan: %w", err)
+	}
+	return plan, nil
+}
+
+func validateDestinationConsistency(req contracts.GeneratePlanRequest, plan contracts.Plan, draft string) string {
 	destination := strings.TrimSpace(req.Destination)
 	if destination == "" {
-		return "用户请求中缺少目的地，无法校验目的地一致性。"
+		return "user request is missing destination, so destination consistency cannot be validated"
+	}
+
+	if strings.TrimSpace(plan.Destination) != "" {
+		if strings.TrimSpace(plan.Destination) != destination {
+			return fmt.Sprintf("structured plan destination %q does not match requested destination %q", plan.Destination, destination)
+		}
+		return ""
 	}
 
 	if !strings.Contains(draft, destination) {
-		return fmt.Sprintf("行程草案未明确提及目的地“%s”，可能存在目的地不一致问题。", destination)
+		return fmt.Sprintf("itinerary draft does not clearly mention requested destination %q", destination)
 	}
 	return ""
 }
 
-func validateBudget(req contracts.GeneratePlanRequest, draft string) string {
+func validateDailyActivityCount(req contracts.GeneratePlanRequest, plan contracts.Plan) string {
+	if len(plan.Days) == 0 {
+		return ""
+	}
+
+	maxActivities := extractMaxActivitiesConstraint(req.Constraints)
+	if maxActivities <= 0 {
+		maxActivities = 2
+	}
+
+	violations := make([]string, 0)
+	for _, day := range plan.Days {
+		count := len(day.Activities)
+		if count > maxActivities {
+			violations = append(violations, fmt.Sprintf("day %d has %d activities, exceeding limit %d", day.Day, count, maxActivities))
+		}
+	}
+
+	if len(violations) > 0 {
+		return strings.Join(violations, "; ")
+	}
+	return ""
+}
+
+func validateBudget(req contracts.GeneratePlanRequest, plan contracts.Plan, draft string) string {
 	budgetLimit := firstNumber(req.Budget)
 	if budgetLimit <= 0 {
 		return ""
 	}
 
-	draftBudget := extractBudgetFromDraft(draft)
+	text := draft
+	if strings.TrimSpace(plan.Summary) != "" {
+		text = plan.Summary
+	}
+
+	draftBudget := extractBudgetFromDraft(text)
 	if draftBudget <= 0 {
-		return "行程草案没有给出明确预算估算，无法确认是否超出预算。"
+		return "itinerary output does not provide an explicit budget estimate, so budget cannot be confirmed"
 	}
 
 	if draftBudget > budgetLimit {
-		return fmt.Sprintf("行程草案估算预算约为%d，超过用户预算上限%d。", draftBudget, budgetLimit)
+		return fmt.Sprintf("estimated budget %d exceeds user budget limit %d", draftBudget, budgetLimit)
 	}
 	return ""
 }
 
-func validateWeatherAdaptation(weatherSummary, draft string) string {
+func validateWeatherAdaptation(weatherSummary string, plan contracts.Plan, draft string) string {
 	if strings.TrimSpace(weatherSummary) == "" {
 		return ""
 	}
 
-	rainy := strings.Contains(weatherSummary, "雨")
-	if !rainy {
+	if !strings.Contains(weatherSummary, "雨") {
 		return ""
 	}
 
-	adaptationHints := []string{"室内", "博物馆", "茶馆", "雨具", "调整", "多云", "半户外"}
-	for _, hint := range adaptationHints {
-		if strings.Contains(draft, hint) {
-			return ""
+	if len(plan.Days) > 0 {
+		for _, day := range plan.Days {
+			for _, activity := range day.Activities {
+				if activity.Indoor {
+					return ""
+				}
+				if containsAny(activity.Description, []string{"雨", "室内", "茶馆", "博物馆", "调整"}) {
+					return ""
+				}
+			}
 		}
 	}
 
-	return "天气预报包含降雨信息，但行程草案没有明显体现雨天适配安排。"
+	if containsAny(draft, []string{"室内", "博物馆", "茶馆", "雨具", "调整", "多云", "半户外"}) {
+		return ""
+	}
+
+	return "weather forecast includes rain, but the itinerary does not clearly show rain-adaptive arrangements"
 }
 
 func buildValidationSummary(passed bool, checks, issues []string) string {
 	if passed {
-		lines := []string{"约束校验通过。"}
+		lines := []string{"validation passed"}
 		if len(checks) > 0 {
-			lines = append(lines, "已通过项："+strings.Join(checks, "；"))
+			lines = append(lines, "checks: "+strings.Join(checks, "; "))
 		}
 		return strings.Join(lines, "\n")
 	}
 
-	lines := []string{"约束校验未通过。"}
+	lines := []string{"validation failed"}
 	if len(checks) > 0 {
-		lines = append(lines, "已通过项："+strings.Join(checks, "；"))
+		lines = append(lines, "checks: "+strings.Join(checks, "; "))
 	}
 	if len(issues) > 0 {
-		lines = append(lines, "发现问题："+strings.Join(issues, "；"))
+		lines = append(lines, "issues: "+strings.Join(issues, "; "))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -201,4 +272,24 @@ func extractBudgetFromDraft(draft string) int {
 		}
 	}
 	return 0
+}
+
+func extractMaxActivitiesConstraint(constraints []string) int {
+	for _, constraint := range constraints {
+		if strings.Contains(constraint, "最多") && strings.Contains(constraint, "景点") {
+			if value := firstNumber(constraint); value > 0 {
+				return value
+			}
+		}
+	}
+	return 0
+}
+
+func containsAny(text string, patterns []string) bool {
+	for _, pattern := range patterns {
+		if strings.Contains(text, pattern) {
+			return true
+		}
+	}
+	return false
 }

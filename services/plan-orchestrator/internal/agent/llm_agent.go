@@ -30,10 +30,12 @@ func (a *LLMAgent) Think(ctx context.Context, session *domain.Session) (domain.T
 	if err != nil {
 		return domain.Thought{}, fmt.Errorf("marshal tools: %w", err)
 	}
+
 	messageJSON, err := json.MarshalIndent(session.Messages, "", "  ")
 	if err != nil {
 		return domain.Thought{}, fmt.Errorf("marshal messages: %w", err)
 	}
+
 	executionJSON, err := json.MarshalIndent(session.Executions, "", "  ")
 	if err != nil {
 		return domain.Thought{}, fmt.Errorf("marshal executions: %w", err)
@@ -121,9 +123,8 @@ func toThought(decision domain.AgentDecision) domain.Thought {
 
 func enrichDraftToolCalls(session *domain.Session, decision *domain.AgentDecision) {
 	weatherSummary := latestSuccessfulToolOutput(session, "query_weather")
-	if strings.TrimSpace(weatherSummary) == "" {
-		return
-	}
+	revisionFeedback := latestValidationFailureSummary(session)
+	existingPlan := latestStructuredPlanFromSession(session)
 
 	for i := range decision.ToolCalls {
 		if decision.ToolCalls[i].Name != "build_itinerary_draft" {
@@ -145,7 +146,15 @@ func enrichDraftToolCalls(session *domain.Session, decision *domain.AgentDecisio
 			continue
 		}
 
-		req.WeatherSummary = weatherSummary
+		if strings.TrimSpace(weatherSummary) != "" {
+			req.WeatherSummary = weatherSummary
+		}
+		if strings.TrimSpace(revisionFeedback) != "" {
+			req.RevisionFeedback = revisionFeedback
+		}
+		if existingPlan != nil {
+			req.ExistingPlan = existingPlan
+		}
 		decision.ToolCalls[i].Arguments["request"] = req
 	}
 }
@@ -171,29 +180,28 @@ func enrichValidationToolCalls(session *domain.Session, decision *domain.AgentDe
 	}
 
 	weatherSummary := latestSuccessfulToolOutput(session, "query_weather")
+	plan := latestStructuredPlanFromSession(session)
+	if plan == nil {
+		return
+	}
 
 	for i := range decision.ToolCalls {
 		if decision.ToolCalls[i].Name != "validate_constraints" {
 			continue
 		}
 
-		requestValue, ok := decision.ToolCalls[i].Arguments["request"]
-		if !ok {
-			continue
-		}
-
-		raw, err := json.Marshal(requestValue)
+		req, err := requestFromSession(session)
 		if err != nil {
 			continue
 		}
 
-		var req contracts.GeneratePlanRequest
-		if err := json.Unmarshal(raw, &req); err != nil {
-			continue
+		if decision.ToolCalls[i].Arguments == nil {
+			decision.ToolCalls[i].Arguments = map[string]interface{}{}
 		}
 
 		decision.ToolCalls[i].Arguments["request"] = req
 		decision.ToolCalls[i].Arguments["draft"] = draft
+		decision.ToolCalls[i].Arguments["plan"] = *plan
 		if strings.TrimSpace(weatherSummary) != "" {
 			decision.ToolCalls[i].Arguments["weather_summary"] = weatherSummary
 		}
@@ -203,12 +211,40 @@ func enrichValidationToolCalls(session *domain.Session, decision *domain.AgentDe
 func enforceStageGuards(session *domain.Session, decision *domain.AgentDecision) {
 	hasDraft := hasSuccessfulToolExecution(session, "build_itinerary_draft")
 	hasValidation := hasSuccessfulToolExecution(session, "validate_constraints")
+	validationPassed, validationFailed := latestValidationState(session)
 
 	if !hasDraft {
 		return
 	}
 
-	// Once a draft exists, never allow another draft call in later turns.
+	if validationFailed && shouldTriggerRepair(session) {
+		req, err := requestFromSession(session)
+		if err == nil {
+			if weatherSummary := latestSuccessfulToolOutput(session, "query_weather"); strings.TrimSpace(weatherSummary) != "" {
+				req.WeatherSummary = weatherSummary
+			}
+			if feedback := latestValidationFailureSummary(session); strings.TrimSpace(feedback) != "" {
+				req.RevisionFeedback = feedback
+			}
+			if plan := latestStructuredPlanFromSession(session); plan != nil {
+				req.ExistingPlan = plan
+			}
+
+			decision.ToolCalls = []domain.ToolCallDecision{
+				{
+					Name: "build_itinerary_draft",
+					Arguments: map[string]interface{}{
+						"request": req,
+					},
+				},
+			}
+			decision.Done = false
+			decision.FinalAnswer = ""
+			decision.Thought = "约束校验未通过，先根据失败原因修正行程草案。"
+			return
+		}
+	}
+
 	filtered := make([]domain.ToolCallDecision, 0, len(decision.ToolCalls))
 	removedDraftCall := false
 	for _, call := range decision.ToolCalls {
@@ -220,13 +256,19 @@ func enforceStageGuards(session *domain.Session, decision *domain.AgentDecision)
 	}
 	decision.ToolCalls = filtered
 
-	// After a draft exists, validation must happen before final completion.
-	if !hasValidation {
+	if !hasValidation || (validationFailed && !shouldTriggerRepair(session)) {
 		if !containsTool(decision.ToolCalls, "validate_constraints") {
 			req, err := requestFromSession(session)
 			if err == nil {
+				plan := latestStructuredPlanFromSession(session)
+				if plan == nil {
+					return
+				}
+
 				callArgs := map[string]interface{}{
 					"request": req,
+					"draft":   latestSuccessfulToolOutput(session, "build_itinerary_draft"),
+					"plan":    *plan,
 				}
 				if weatherSummary := latestSuccessfulToolOutput(session, "query_weather"); strings.TrimSpace(weatherSummary) != "" {
 					callArgs["weather_summary"] = weatherSummary
@@ -244,13 +286,14 @@ func enforceStageGuards(session *domain.Session, decision *domain.AgentDecision)
 		decision.Done = false
 		decision.FinalAnswer = ""
 		if removedDraftCall && strings.TrimSpace(decision.Thought) == "" {
-			decision.Thought = "已生成草案，下一步进行约束校验。"
+			decision.Thought = "Draft already exists. Proceeding to constraint validation."
 		}
 		return
 	}
 
-	// If validation already exists, do not allow more tool calls in later turns.
-	decision.ToolCalls = nil
+	if validationPassed {
+		decision.ToolCalls = nil
+	}
 }
 
 func containsTool(calls []domain.ToolCallDecision, name string) bool {
@@ -268,6 +311,103 @@ func requestFromSession(session *domain.Session) (contracts.GeneratePlanRequest,
 		return contracts.GeneratePlanRequest{}, err
 	}
 	return req, nil
+}
+
+func latestStructuredPlanFromSession(session *domain.Session) *contracts.Plan {
+	for i := len(session.Executions) - 1; i >= 0; i-- {
+		execution := session.Executions[i]
+		if execution.Name != "build_itinerary_draft" || !execution.Success {
+			continue
+		}
+
+		planValue, ok := execution.Meta["plan"]
+		if !ok {
+			continue
+		}
+
+		raw, err := json.Marshal(planValue)
+		if err != nil {
+			continue
+		}
+
+		var plan contracts.Plan
+		if err := json.Unmarshal(raw, &plan); err != nil {
+			continue
+		}
+		return &plan
+	}
+	return nil
+}
+
+func latestValidationState(session *domain.Session) (passed bool, failed bool) {
+	for i := len(session.Executions) - 1; i >= 0; i-- {
+		execution := session.Executions[i]
+		if execution.Name != "validate_constraints" || !execution.Success {
+			continue
+		}
+
+		value, ok := execution.Meta["passed"]
+		if !ok {
+			break
+		}
+
+		passedValue, ok := value.(bool)
+		if !ok {
+			break
+		}
+
+		if passedValue {
+			return true, false
+		}
+		return false, true
+	}
+	return false, false
+}
+
+func latestValidationFailureSummary(session *domain.Session) string {
+	passed, failed := latestValidationState(session)
+	if passed || !failed {
+		return ""
+	}
+	return latestSuccessfulToolOutput(session, "validate_constraints")
+}
+
+func shouldTriggerRepair(session *domain.Session) bool {
+	lastValidationIndex := latestSuccessfulExecutionIndex(session, "validate_constraints")
+	if lastValidationIndex < 0 {
+		return false
+	}
+
+	lastDraftIndex := latestSuccessfulExecutionIndex(session, "build_itinerary_draft")
+	if lastDraftIndex < 0 {
+		return false
+	}
+
+	if countSuccessfulToolExecutions(session, "build_itinerary_draft") >= 2 {
+		return false
+	}
+
+	return lastDraftIndex < lastValidationIndex
+}
+
+func latestSuccessfulExecutionIndex(session *domain.Session, toolName string) int {
+	for i := len(session.Executions) - 1; i >= 0; i-- {
+		execution := session.Executions[i]
+		if execution.Name == toolName && execution.Success {
+			return i
+		}
+	}
+	return -1
+}
+
+func countSuccessfulToolExecutions(session *domain.Session, toolName string) int {
+	count := 0
+	for _, execution := range session.Executions {
+		if execution.Name == toolName && execution.Success {
+			count++
+		}
+	}
+	return count
 }
 
 func extractJSON(raw string) string {
