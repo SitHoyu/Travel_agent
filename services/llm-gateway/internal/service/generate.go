@@ -76,16 +76,18 @@ func (s *Service) Generate(ctx context.Context, req contracts.LLMGenerateRequest
 
 func (s *Service) GeneratePlan(ctx context.Context, req contracts.GeneratePlanRequest, providerName, model string) (contracts.LLMGenerateResponse, error) {
 	variables := map[string]any{
-		"request_id":      req.RequestID,
-		"destination":     req.Destination,
-		"start_date":      req.StartDate,
-		"end_date":        req.EndDate,
-		"budget":          req.Budget,
-		"travelers":       req.Travelers,
-		"preferences":     strings.Join(req.Preferences, ", "),
-		"constraints":     strings.Join(req.Constraints, ", "),
-		"weather_summary": req.WeatherSummary,
-		"payload":         mustJSON(req),
+		"request_id":        req.RequestID,
+		"destination":       req.Destination,
+		"start_date":        req.StartDate,
+		"end_date":          req.EndDate,
+		"budget":            req.Budget,
+		"travelers":         req.Travelers,
+		"preferences":       strings.Join(req.Preferences, ", "),
+		"constraints":       strings.Join(req.Constraints, ", "),
+		"weather_summary":   req.WeatherSummary,
+		"revision_feedback": req.RevisionFeedback,
+		"existing_plan":     mustJSON(req.ExistingPlan),
+		"payload":           mustJSON(req),
 	}
 
 	return s.Generate(ctx, contracts.LLMGenerateRequest{

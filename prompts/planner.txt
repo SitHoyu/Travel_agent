@@ -10,6 +10,10 @@ Preferences: {{.preferences}}
 Constraints: {{.constraints}}
 Weather summary:
 {{if .weather_summary}}{{.weather_summary}}{{else}}No weather data was provided.{{end}}
+Revision feedback:
+{{if .revision_feedback}}{{.revision_feedback}}{{else}}No revision feedback was provided.{{end}}
+Existing structured plan:
+{{if .existing_plan}}{{.existing_plan}}{{else}}No existing plan was provided.{{end}}
 
 Return exactly one valid JSON object. Do not wrap it in markdown fences.
 The JSON schema must be:
@@ -42,3 +46,5 @@ Rules:
 3. Use realistic place names whenever possible.
 4. If weather data is available, adapt indoor/outdoor activities to the forecast.
 5. Keep the summary concise and mention budget and pacing.
+6. If revision feedback is provided, you must fix every listed issue in the new plan.
+7. If an existing plan is provided, preserve good parts when possible instead of rewriting everything arbitrarily.
