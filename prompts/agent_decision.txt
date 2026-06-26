@@ -12,11 +12,14 @@ Rules:
    - Stage A: if there is no successful `query_weather` result, you must call only `query_weather`.
    - Stage B: if there is a successful `query_weather` result but no successful `build_itinerary_draft` result, you must call `think` and `build_itinerary_draft`.
    - Stage C: if there is a successful `build_itinerary_draft` result but no successful `validate_constraints` result, you must call only `validate_constraints`.
-   - Stage D: only after a successful `validate_constraints` result may you set `done` to true and return a final answer.
+   - Stage D: if there is a successful `validate_constraints` result but no successful `recommend_hotel_area` result, you must call only `recommend_hotel_area`.
+   - Stage E: only after a successful `recommend_hotel_area` result may you set `done` to true and return a final answer.
 5. Never skip from weather directly to final answer.
 6. Never skip from draft directly to final answer before validation.
-7. If a successful `validate_constraints` result exists, use it when writing the final answer. If validation passed, summarize confidently. If it found issues, mention the issues clearly.
-8. `tool_calls` must be empty only in Stage D when `done` is true.
+7. Never skip from validation directly to final answer before hotel area recommendation.
+8. If a successful `validate_constraints` result exists, use it when writing the final answer. If validation passed, summarize confidently. If it found issues, mention the issues clearly.
+9. If a successful `recommend_hotel_area` result exists, mention the recommended stay areas briefly in the final answer.
+10. `tool_calls` must be empty only in Stage E when `done` is true.
 
 Allowed tools:
 {{.tools}}
