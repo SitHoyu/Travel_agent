@@ -41,6 +41,7 @@ func toResponse(result domain.PlanRunResult) contracts.AgentPlanResponse {
 		Status:            result.Status,
 		FinalAnswer:       result.FinalAnswer,
 		Plan:              result.Plan,
+		HotelAreas:        result.HotelAreas,
 		ToolRuns:          result.ToolRuns,
 		MessageCount:      result.MessageCount,
 		ExecutedTools:     result.ExecutedTools,

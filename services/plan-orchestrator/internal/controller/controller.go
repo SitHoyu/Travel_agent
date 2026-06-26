@@ -90,6 +90,7 @@ func (c *Controller) Run(ctx context.Context, req contracts.GeneratePlanRequest)
 				Status:            session.Status,
 				FinalAnswer:       finalAnswer,
 				Plan:              buildPlanDraft(session, req, finalAnswer),
+				HotelAreas:        latestHotelAreaRecommendation(session),
 				ToolRuns:          len(session.Executions),
 				MessageCount:      len(session.Messages),
 				ExecutedTools:     executedToolNames(session),
@@ -215,4 +216,30 @@ func latestStructuredPlan(session *domain.Session) *contracts.Plan {
 		return &plan
 	}
 	return nil
+}
+
+func latestHotelAreaRecommendation(session *domain.Session) contracts.HotelAreaRecommendationResult {
+	for i := len(session.Executions) - 1; i >= 0; i-- {
+		execution := session.Executions[i]
+		if execution.Name != "recommend_hotel_area" || !execution.Success {
+			continue
+		}
+
+		value, ok := execution.Meta["hotel_areas"]
+		if !ok {
+			continue
+		}
+
+		raw, err := json.Marshal(value)
+		if err != nil {
+			continue
+		}
+
+		var result contracts.HotelAreaRecommendationResult
+		if err := json.Unmarshal(raw, &result); err != nil {
+			continue
+		}
+		return result
+	}
+	return contracts.HotelAreaRecommendationResult{}
 }

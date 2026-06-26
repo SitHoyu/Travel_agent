@@ -7,6 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/travel-agent/services/plan-orchestrator/internal/agent"
+	"github.com/travel-agent/services/plan-orchestrator/internal/client/amapgeo"
 	"github.com/travel-agent/services/plan-orchestrator/internal/client/amapweather"
 	"github.com/travel-agent/services/plan-orchestrator/internal/client/llmgateway"
 	appconfig "github.com/travel-agent/services/plan-orchestrator/internal/config"
@@ -25,17 +26,20 @@ func main() {
 	}
 
 	llmClient := llmgateway.NewClient(cfg.LLMGateway.BaseURL, cfg.LLMGateway.Provider, cfg.LLMGateway.Model)
+	geoClient := amapgeo.NewClient(cfg.AMap.BaseURL, cfg.AMap.APIKey)
 	weatherClient := amapweather.NewClient(cfg.AMap.BaseURL, cfg.AMap.APIKey)
 	cityResolver, err := local.LoadCityCodeResolver(cfg.AMap.AdcodeFile)
 	if err != nil {
 		log.Fatalf("load amap adcode file: %v", err)
 	}
+	locationEnricher := local.NewLocationEnricher(geoClient)
 
 	toolRegistry := toolkit.NewRegistry()
 	toolRegistry.Register(local.NewThinkTool())
 	toolRegistry.Register(local.NewWeatherTool(weatherClient, cityResolver))
-	toolRegistry.Register(local.NewBuildItineraryDraftTool(llmClient))
+	toolRegistry.Register(local.NewBuildItineraryDraftTool(llmClient, locationEnricher))
 	toolRegistry.Register(local.NewValidateConstraintsTool())
+	toolRegistry.Register(local.NewRecommendHotelAreaTool())
 
 	runtimeAgent := agent.NewLLMAgent(llmClient, toolRegistry)
 	controller := controller.New(runtimeAgent, toolRegistry, cfg.Controller.MaxSteps)

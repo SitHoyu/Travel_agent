@@ -13,7 +13,7 @@ amap:
   adcode_file: ../../AMap_adcode_citycode.xlsx
 
 controller:
-  max_steps: 7
+  max_steps: 10
 
 storage:
   driver: memory

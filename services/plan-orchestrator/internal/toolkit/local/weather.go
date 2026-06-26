@@ -64,7 +64,7 @@ func (t *WeatherTool) Execute(ctx context.Context, args map[string]interface{}) 
 			"city":       cityForecast.City,
 			"province":   cityForecast.Province,
 			"adcode":     cityForecast.Adcode,
-			"reporttime": cityForecast.ReportTime,
+			"reporttime": cityForecast.ReportTime, //暂时设为三天
 			"casts":      casts,
 		},
 	}, nil

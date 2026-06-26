@@ -53,6 +53,7 @@ func (a *LLMAgent) Think(ctx context.Context, session *domain.Session) (domain.T
 
 	enrichDraftToolCalls(session, &decision)
 	enrichValidationToolCalls(session, &decision)
+	enrichHotelAreaToolCalls(session, &decision)
 	enforceStageGuards(session, &decision)
 	return toThought(decision), nil
 }
@@ -159,20 +160,6 @@ func enrichDraftToolCalls(session *domain.Session, decision *domain.AgentDecisio
 	}
 }
 
-func latestSuccessfulToolOutput(session *domain.Session, toolName string) string {
-	for i := len(session.Executions) - 1; i >= 0; i-- {
-		execution := session.Executions[i]
-		if execution.Name == toolName && execution.Success {
-			return execution.Output
-		}
-	}
-	return ""
-}
-
-func hasSuccessfulToolExecution(session *domain.Session, toolName string) bool {
-	return strings.TrimSpace(latestSuccessfulToolOutput(session, toolName)) != ""
-}
-
 func enrichValidationToolCalls(session *domain.Session, decision *domain.AgentDecision) {
 	draft := latestSuccessfulToolOutput(session, "build_itinerary_draft")
 	if strings.TrimSpace(draft) == "" {
@@ -208,9 +195,49 @@ func enrichValidationToolCalls(session *domain.Session, decision *domain.AgentDe
 	}
 }
 
+func enrichHotelAreaToolCalls(session *domain.Session, decision *domain.AgentDecision) {
+	plan := latestStructuredPlanFromSession(session)
+	if plan == nil {
+		return
+	}
+
+	for i := range decision.ToolCalls {
+		if decision.ToolCalls[i].Name != "recommend_hotel_area" {
+			continue
+		}
+
+		req, err := requestFromSession(session)
+		if err != nil {
+			continue
+		}
+
+		if decision.ToolCalls[i].Arguments == nil {
+			decision.ToolCalls[i].Arguments = map[string]interface{}{}
+		}
+
+		decision.ToolCalls[i].Arguments["request"] = req
+		decision.ToolCalls[i].Arguments["plan"] = *plan
+	}
+}
+
+func latestSuccessfulToolOutput(session *domain.Session, toolName string) string {
+	for i := len(session.Executions) - 1; i >= 0; i-- {
+		execution := session.Executions[i]
+		if execution.Name == toolName && execution.Success {
+			return execution.Output
+		}
+	}
+	return ""
+}
+
+func hasSuccessfulToolExecution(session *domain.Session, toolName string) bool {
+	return strings.TrimSpace(latestSuccessfulToolOutput(session, toolName)) != ""
+}
+
 func enforceStageGuards(session *domain.Session, decision *domain.AgentDecision) {
 	hasDraft := hasSuccessfulToolExecution(session, "build_itinerary_draft")
 	hasValidation := hasSuccessfulToolExecution(session, "validate_constraints")
+	hasHotelAreas := hasSuccessfulToolExecution(session, "recommend_hotel_area")
 	validationPassed, validationFailed := latestValidationState(session)
 
 	if !hasDraft {
@@ -291,7 +318,33 @@ func enforceStageGuards(session *domain.Session, decision *domain.AgentDecision)
 		return
 	}
 
-	if validationPassed {
+	if validationPassed && !hasHotelAreas {
+		req, err := requestFromSession(session)
+		if err == nil {
+			plan := latestStructuredPlanFromSession(session)
+			if plan == nil {
+				return
+			}
+
+			decision.ToolCalls = []domain.ToolCallDecision{
+				{
+					Name: "recommend_hotel_area",
+					Arguments: map[string]interface{}{
+						"request": req,
+						"plan":    *plan,
+					},
+				},
+			}
+			decision.Done = false
+			decision.FinalAnswer = ""
+			if strings.TrimSpace(decision.Thought) == "" {
+				decision.Thought = "行程与约束校验已完成，补充住宿区域建议。"
+			}
+			return
+		}
+	}
+
+	if validationPassed && hasHotelAreas {
 		decision.ToolCalls = nil
 	}
 }
