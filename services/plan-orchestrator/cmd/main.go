@@ -8,6 +8,7 @@ import (
 
 	"github.com/travel-agent/services/plan-orchestrator/internal/agent"
 	"github.com/travel-agent/services/plan-orchestrator/internal/client/amapgeo"
+	"github.com/travel-agent/services/plan-orchestrator/internal/client/amaphotel"
 	"github.com/travel-agent/services/plan-orchestrator/internal/client/amapweather"
 	"github.com/travel-agent/services/plan-orchestrator/internal/client/llmgateway"
 	appconfig "github.com/travel-agent/services/plan-orchestrator/internal/config"
@@ -27,6 +28,7 @@ func main() {
 
 	llmClient := llmgateway.NewClient(cfg.LLMGateway.BaseURL, cfg.LLMGateway.Provider, cfg.LLMGateway.Model)
 	geoClient := amapgeo.NewClient(cfg.AMap.BaseURL, cfg.AMap.APIKey)
+	hotelClient := amaphotel.NewClient(cfg.AMap.BaseURL, cfg.AMap.APIKey)
 	weatherClient := amapweather.NewClient(cfg.AMap.BaseURL, cfg.AMap.APIKey)
 	cityResolver, err := local.LoadCityCodeResolver(cfg.AMap.AdcodeFile)
 	if err != nil {
@@ -39,7 +41,7 @@ func main() {
 	toolRegistry.Register(local.NewWeatherTool(weatherClient, cityResolver))
 	toolRegistry.Register(local.NewBuildItineraryDraftTool(llmClient, locationEnricher))
 	toolRegistry.Register(local.NewValidateConstraintsTool())
-	toolRegistry.Register(local.NewRecommendHotelAreaTool())
+	toolRegistry.Register(local.NewRecommendHotelAreaTool(hotelClient))
 
 	runtimeAgent := agent.NewLLMAgent(llmClient, toolRegistry)
 	controller := controller.New(runtimeAgent, toolRegistry, cfg.Controller.MaxSteps)

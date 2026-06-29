@@ -11,8 +11,11 @@ type Plan struct {
 }
 
 type HotelAreaRecommendationResult struct {
-	Summary         string                    `json:"summary"`
-	Recommendations []HotelAreaRecommendation `json:"recommendations"`
+	Summary           string                    `json:"summary"`
+	RecommendedCenter *GeoPoint                 `json:"recommended_center,omitempty"`
+	NearbyHotels      []HotelCandidate          `json:"nearby_hotels,omitempty"`
+	NearbyHotelsError string                    `json:"nearby_hotels_error,omitempty"`
+	Recommendations   []HotelAreaRecommendation `json:"recommendations"`
 }
 
 type HotelAreaRecommendation struct {
@@ -23,6 +26,20 @@ type HotelAreaRecommendation struct {
 	Pros        []string `json:"pros,omitempty"`
 	Cons        []string `json:"cons,omitempty"`
 	SuitableFor []string `json:"suitable_for,omitempty"`
+}
+
+type GeoPoint struct {
+	Longitude float64 `json:"longitude"`
+	Latitude  float64 `json:"latitude"`
+	Source    string  `json:"source,omitempty"`
+}
+
+type HotelCandidate struct {
+	Name      string   `json:"name"`
+	Address   string   `json:"address,omitempty"`
+	DistanceM int      `json:"distance_m,omitempty"`
+	PhotoURL  string   `json:"photo_url,omitempty"`
+	Location  GeoPoint `json:"location"`
 }
 
 type PlanDay struct {

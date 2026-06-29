@@ -4,17 +4,22 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
+	"strconv"
 	"strings"
 
+	"github.com/travel-agent/services/plan-orchestrator/internal/client/amaphotel"
 	"github.com/travel-agent/services/plan-orchestrator/internal/domain"
 	"github.com/travel-agent/shared/contracts"
 )
 
-type RecommendHotelAreaTool struct{}
+type RecommendHotelAreaTool struct {
+	hotelClient *amaphotel.Client
+}
 
-func NewRecommendHotelAreaTool() *RecommendHotelAreaTool {
-	return &RecommendHotelAreaTool{}
+func NewRecommendHotelAreaTool(hotelClient *amaphotel.Client) *RecommendHotelAreaTool {
+	return &RecommendHotelAreaTool{hotelClient: hotelClient}
 }
 
 func (t *RecommendHotelAreaTool) Name() string {
@@ -22,10 +27,10 @@ func (t *RecommendHotelAreaTool) Name() string {
 }
 
 func (t *RecommendHotelAreaTool) Description() string {
-	return "Recommend 2-3 hotel areas based on the validated itinerary, destination, budget, and preferences. Args: request, plan."
+	return "Recommend 2-3 hotel areas based on the validated itinerary, destination, budget, and preferences, and attach 0-3 nearby hotel candidates. Args: request, plan."
 }
 
-func (t *RecommendHotelAreaTool) Execute(_ context.Context, args map[string]interface{}) (domain.ToolExecution, error) {
+func (t *RecommendHotelAreaTool) Execute(ctx context.Context, args map[string]interface{}) (domain.ToolExecution, error) {
 	reqValue, ok := args["request"]
 	if !ok {
 		return domain.ToolExecution{}, fmt.Errorf("missing request argument")
@@ -42,6 +47,22 @@ func (t *RecommendHotelAreaTool) Execute(_ context.Context, args map[string]inte
 	}
 
 	result := buildHotelAreaRecommendation(req, plan)
+	if t.hotelClient != nil && result.RecommendedCenter != nil {
+		hotels, err := t.fetchNearbyHotels(ctx, req.Destination, *result.RecommendedCenter)
+		if err == nil {
+			result.NearbyHotels = hotels
+			if len(hotels) == 0 {
+				result.NearbyHotelsError = "nearby hotel query succeeded but returned no usable hotel candidates"
+			}
+		} else {
+			result.NearbyHotelsError = err.Error()
+		}
+	} else if t.hotelClient == nil {
+		result.NearbyHotelsError = "hotel client is not configured"
+	} else if result.RecommendedCenter == nil {
+		result.NearbyHotelsError = "recommended center is empty"
+	}
+
 	return domain.ToolExecution{
 		Success: true,
 		Output:  result.Summary,
@@ -49,6 +70,37 @@ func (t *RecommendHotelAreaTool) Execute(_ context.Context, args map[string]inte
 			"hotel_areas": result,
 		},
 	}, nil
+}
+
+func (t *RecommendHotelAreaTool) fetchNearbyHotels(ctx context.Context, city string, center contracts.GeoPoint) ([]contracts.HotelCandidate, error) {
+	resp, err := t.hotelClient.SearchNearbyHotels(ctx, city, center.Longitude, center.Latitude, 3)
+	if err != nil {
+		return nil, err
+	}
+
+	hotels := make([]contracts.HotelCandidate, 0, len(resp.POIs))
+	for _, poi := range resp.POIs {
+		lng, lat, err := parsePOILocation(poi.Location)
+		if err != nil {
+			continue
+		}
+
+		hotels = append(hotels, contracts.HotelCandidate{
+			Name:      poi.Name,
+			Address:   poi.Address,
+			DistanceM: parseDistanceMeters(poi.Distance),
+			PhotoURL:  firstPhotoURL(poi.Photos),
+			Location: contracts.GeoPoint{
+				Longitude: lng,
+				Latitude:  lat,
+			},
+		})
+	}
+
+	if len(resp.POIs) > 0 && len(hotels) == 0 {
+		return nil, fmt.Errorf("amap returned %d pois but none could be converted into hotel candidates", len(resp.POIs))
+	}
+	return hotels, nil
 }
 
 func decodeHotelPlanArg(value interface{}) (contracts.Plan, error) {
@@ -75,17 +127,27 @@ type genericAreaScore struct {
 	Keywords     []string
 }
 
+type activityPoint struct {
+	Name     string
+	AreaName string
+	Lng      float64
+	Lat      float64
+}
+
 func buildHotelAreaRecommendation(req contracts.GeneratePlanRequest, plan contracts.Plan) contracts.HotelAreaRecommendationResult {
 	scores := scoreGenericAreas(req, plan)
 	if len(scores) == 0 {
 		fallbackArea := strings.TrimSpace(req.Destination) + "核心城区"
 		return contracts.HotelAreaRecommendationResult{
-			Summary: fmt.Sprintf("当前行程区域信息较少，建议优先住在%s，方便覆盖主要景点与餐饮区。", fallbackArea),
+			Summary: "当前行程区域信息较少，建议优先住在核心城区，方便覆盖主要景点与餐饮区。",
+			RecommendedCenter: computeRecommendedCenter(plan, []contracts.HotelAreaRecommendation{
+				{Area: fallbackArea, Priority: 1},
+			}),
 			Recommendations: []contracts.HotelAreaRecommendation{
 				{
 					Area:        fallbackArea,
 					Priority:    1,
-					PriceRange:  estimateHotelPriceRange(req.Budget, max(1, len(plan.Days))),
+					PriceRange:  estimateHotelPriceRange(req.Budget, maxInt(1, len(plan.Days))),
 					FitReason:   "当前活动区域信息不足，先住核心城区更稳妥，后续可按景点分布再细化。",
 					Pros:        []string{"通用性强", "更容易覆盖主要景点"},
 					Cons:        []string{"未针对具体活动片区做精细优化"},
@@ -102,24 +164,25 @@ func buildHotelAreaRecommendation(req contracts.GeneratePlanRequest, plan contra
 		return scores[i].Score > scores[j].Score
 	})
 
-	limit := min(3, len(scores))
+	limit := minInt(3, len(scores))
 	recommendations := make([]contracts.HotelAreaRecommendation, 0, limit)
 	for i := 0; i < limit; i++ {
 		item := scores[i]
 		recommendations = append(recommendations, contracts.HotelAreaRecommendation{
 			Area:        item.Name,
 			Priority:    i + 1,
-			PriceRange:  estimateHotelPriceRange(req.Budget, max(1, len(plan.Days))),
+			PriceRange:  estimateHotelPriceRange(req.Budget, maxInt(1, len(plan.Days))),
 			FitReason:   buildGenericAreaFitReason(item, req),
 			Pros:        buildGenericPros(item, req),
-			Cons:        buildGenericCons(item, req),
+			Cons:        buildGenericCons(item),
 			SuitableFor: buildGenericSuitableFor(req.Preferences),
 		})
 	}
 
 	return contracts.HotelAreaRecommendationResult{
-		Summary:         buildGenericHotelAreaSummary(recommendations, req),
-		Recommendations: recommendations,
+		Summary:           buildGenericHotelAreaSummary(recommendations, req),
+		RecommendedCenter: computeRecommendedCenter(plan, recommendations),
+		Recommendations:   recommendations,
 	}
 }
 
@@ -166,6 +229,135 @@ func scoreGenericAreas(req contracts.GeneratePlanRequest, plan contracts.Plan) [
 	return result
 }
 
+func computeRecommendedCenter(plan contracts.Plan, recommendations []contracts.HotelAreaRecommendation) *contracts.GeoPoint {
+	allPoints := collectActivityPoints(plan, "")
+	if len(allPoints) == 0 {
+		return nil
+	}
+
+	if len(recommendations) > 0 {
+		topArea := strings.TrimSpace(recommendations[0].Area)
+		areaPoints := collectActivityPoints(plan, topArea)
+		if point := pickRepresentativePoint(areaPoints); point != nil {
+			return &contracts.GeoPoint{
+				Longitude: point.Lng,
+				Latitude:  point.Lat,
+				Source:    "top_area_representative_point",
+			}
+		}
+		if point := centroidPoint(areaPoints); point != nil {
+			return &contracts.GeoPoint{
+				Longitude: point.Lng,
+				Latitude:  point.Lat,
+				Source:    "top_area_centroid",
+			}
+		}
+	}
+
+	if point := pickRepresentativePoint(allPoints); point != nil {
+		return &contracts.GeoPoint{
+			Longitude: point.Lng,
+			Latitude:  point.Lat,
+			Source:    "all_points_representative_point",
+		}
+	}
+
+	if point := centroidPoint(allPoints); point != nil {
+		return &contracts.GeoPoint{
+			Longitude: point.Lng,
+			Latitude:  point.Lat,
+			Source:    "all_points_centroid",
+		}
+	}
+
+	return nil
+}
+
+func collectActivityPoints(plan contracts.Plan, areaFilter string) []activityPoint {
+	points := make([]activityPoint, 0)
+	for _, day := range plan.Days {
+		for _, activity := range day.Activities {
+			if activity.Longitude == 0 && activity.Latitude == 0 {
+				continue
+			}
+
+			areaName := firstAreaCandidate(activity)
+			if strings.TrimSpace(areaFilter) != "" && areaName != strings.TrimSpace(areaFilter) {
+				continue
+			}
+
+			points = append(points, activityPoint{
+				Name:     activity.Name,
+				AreaName: areaName,
+				Lng:      activity.Longitude,
+				Lat:      activity.Latitude,
+			})
+		}
+	}
+	return points
+}
+
+func firstAreaCandidate(activity contracts.Activity) string {
+	candidates := extractAreaCandidates("", activity)
+	if len(candidates) == 0 {
+		return ""
+	}
+	return candidates[0]
+}
+
+func pickRepresentativePoint(points []activityPoint) *activityPoint {
+	if len(points) == 0 {
+		return nil
+	}
+	if len(points) == 1 {
+		point := points[0]
+		return &point
+	}
+
+	bestIndex := 0
+	bestScore := math.MaxFloat64
+	for i := range points {
+		total := 0.0
+		for j := range points {
+			if i == j {
+				continue
+			}
+			total += squaredDistance(points[i], points[j])
+		}
+		if total < bestScore {
+			bestScore = total
+			bestIndex = i
+		}
+	}
+
+	point := points[bestIndex]
+	return &point
+}
+
+func centroidPoint(points []activityPoint) *activityPoint {
+	if len(points) == 0 {
+		return nil
+	}
+
+	var sumLng float64
+	var sumLat float64
+	for _, point := range points {
+		sumLng += point.Lng
+		sumLat += point.Lat
+	}
+
+	return &activityPoint{
+		Lng: sumLng / float64(len(points)),
+		Lat: sumLat / float64(len(points)),
+	}
+}
+
+func squaredDistance(a, b activityPoint) float64 {
+	dLng := a.Lng - b.Lng
+	dLat := a.Lat - b.Lat
+	return dLng*dLng + dLat*dLat
+}
+
 func extractAreaCandidates(destination string, activity contracts.Activity) []string {
 	candidates := make([]string, 0, 3)
 
@@ -207,7 +399,9 @@ func extractLocationArea(location, destination string) string {
 		return ""
 	}
 
-	text = strings.TrimPrefix(text, strings.TrimSpace(destination))
+	if strings.TrimSpace(destination) != "" {
+		text = strings.TrimPrefix(text, strings.TrimSpace(destination))
+	}
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return ""
@@ -221,7 +415,7 @@ func extractLocationArea(location, destination string) string {
 	if len(runes) > 8 {
 		text = string(runes[:8])
 	}
-	text = strings.Trim(text, "- ,，。;；")
+	text = strings.Trim(text, "- ,，。；;")
 	if text == "" {
 		return ""
 	}
@@ -233,7 +427,6 @@ func splitAreaSegments(text string) []string {
 		",", " ",
 		"，", " ",
 		"/", " ",
-		"·", " ",
 		"-", " ",
 	)
 	return strings.Fields(replacer.Replace(text))
@@ -304,7 +497,7 @@ func buildGenericPros(item genericAreaScore, req contracts.GeneratePlanRequest) 
 	return pros
 }
 
-func buildGenericCons(item genericAreaScore, req contracts.GeneratePlanRequest) []string {
+func buildGenericCons(item genericAreaScore) []string {
 	cons := []string{
 		"仍需结合实际酒店库存和交通情况二次确认",
 	}
@@ -355,6 +548,38 @@ func estimateHotelPriceRange(budget string, days int) string {
 	}
 }
 
+func parsePOILocation(location string) (float64, float64, error) {
+	parts := strings.Split(strings.TrimSpace(location), ",")
+	if len(parts) != 2 {
+		return 0, 0, fmt.Errorf("invalid poi location %q", location)
+	}
+
+	lng, err := strconv.ParseFloat(strings.TrimSpace(parts[0]), 64)
+	if err != nil {
+		return 0, 0, err
+	}
+	lat, err := strconv.ParseFloat(strings.TrimSpace(parts[1]), 64)
+	if err != nil {
+		return 0, 0, err
+	}
+	return lng, lat, nil
+}
+
+func parseDistanceMeters(distance string) int {
+	value, err := strconv.Atoi(strings.TrimSpace(distance))
+	if err != nil {
+		return 0
+	}
+	return value
+}
+
+func firstPhotoURL(photos []amaphotel.Photo) string {
+	if len(photos) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(photos[0].URL)
+}
+
 func appendUnique(values []string, value string) []string {
 	for _, existing := range values {
 		if existing == value {
@@ -377,14 +602,14 @@ func uniqueStrings(values []string) []string {
 	return result
 }
 
-func min(a, b int) int {
+func minInt(a, b int) int {
 	if a < b {
 		return a
 	}
 	return b
 }
 
-func max(a, b int) int {
+func maxInt(a, b int) int {
 	if a > b {
 		return a
 	}
