@@ -8,13 +8,16 @@ llm_gateway:
 
 amap:
   base_url: https://restapi.amap.com
-  api_key: "63373af6f26ad58aaf3b80ad70bec703"
-  api_key_env: AMAP_API_KEY
+  api_key: "${AMAP_API_KEY}"
   adcode_file: ../../AMap_adcode_citycode.xlsx
 
 controller:
   max_steps: 10
 
+auth:
+  jwt_secret: "${JWT_SECRET}"
+  token_ttl_hours: 24
+
 storage:
-  driver: memory
-  dsn: ""
+  driver: mysql
+  dsn: "${MYSQL_DSN}"
