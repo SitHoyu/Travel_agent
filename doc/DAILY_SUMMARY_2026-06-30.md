@@ -206,3 +206,21 @@ $detailResp | ConvertTo-Json -Depth 20
   - background goroutines for non-critical logging/trace/statistics
   - request timeout and cancellation improvements with `context.Context`
   - later, selective parallel tool execution if future tools become independent enough
+
+- 如果并发生成确实有压力，再做“轻量级异步任务化”，建议先不要一上来就 RabbitMQ /Kafka。
+- 第一版更合适的是：
+- 数据库任务表
+- Go worker pool
+- HTTP 提交任务接口
+- 轮询任务状态接口
+- 比如新增一个 plan_jobs 表，字段类似：
+- id
+- user_id
+- status (pending/running/success/failed)
+- request_payload_json
+- result_json
+- error_message
+- created_at
+- updated_at
+- 流程变成：前端提交生成请求，服务端写入 plan_jobs，后台 goroutine / worker 拉取待处理任务，处理完成后更新任务状态。前端轮询任务状态，成功后展示结果，用户再决定是否保存到 plans
+- 这其实已经很能体现 Go 的特性了，而且复杂度远低于正式 MQ。

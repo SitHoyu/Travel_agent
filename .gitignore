@@ -3,6 +3,10 @@
 
 # 环境变量
 .env
+.env.example
+
+# 前端依赖
+frontend/node_modules/
 
 # 其他常见的 Go 忽略项
 # *.exe

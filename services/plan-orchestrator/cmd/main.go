@@ -62,7 +62,7 @@ func main() {
 	handler := httpHandler.NewHandler(planService, userService, middleware.AuthRequired(tokenManager))
 
 	router := gin.New()
-	router.Use(gin.Logger(), gin.Recovery())
+	router.Use(gin.Logger(), gin.Recovery(), middleware.CORS())
 	handler.RegisterRoutes(router)
 
 	addr := ":" + cfg.Server.Port
