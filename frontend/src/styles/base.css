@@ -427,6 +427,128 @@ textarea {
   font-size: 14px;
 }
 
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.detail-meta {
+  display: grid;
+  gap: 8px;
+}
+
+.detail-meta p,
+.detail-summary {
+  margin: 0;
+}
+
+.recommendation-list,
+.day-list,
+.activity-list {
+  display: grid;
+  gap: 16px;
+}
+
+.recommendation-card,
+.day-card,
+.activity-card,
+.hotel-card {
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.56);
+}
+
+.recommendation-card,
+.day-card,
+.activity-card {
+  padding: 18px;
+}
+
+.recommendation-card__title,
+.day-card__title,
+.activity-card__title,
+.hotel-card__title {
+  margin: 0;
+}
+
+.recommendation-card__meta,
+.recommendation-card__reason,
+.day-card__date,
+.activity-card__meta,
+.activity-card__location,
+.activity-card__description,
+.activity-card__coord,
+.hotel-card__text,
+.hotel-card__meta {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.7;
+}
+
+.recommendation-card__reason,
+.activity-card__description {
+  color: var(--text);
+}
+
+.tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(154, 61, 34, 0.1);
+  color: var(--accent-strong);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.hotel-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.hotel-card {
+  overflow: hidden;
+}
+
+.hotel-card__media {
+  aspect-ratio: 4 / 3;
+  background: rgba(42, 36, 28, 0.08);
+}
+
+.hotel-card__image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.hotel-card__placeholder {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+
+.hotel-card__body {
+  padding: 16px;
+  display: grid;
+  gap: 8px;
+}
+
+.empty-state--compact {
+  padding: 8px 0 0;
+}
+
 .message {
   margin: 0;
   padding: 12px 14px;
@@ -462,7 +584,9 @@ textarea {
 
   .planner-grid,
   .field-row,
-  .summary-grid {
+  .summary-grid,
+  .detail-grid,
+  .hotel-grid {
     grid-template-columns: 1fr;
   }
 
